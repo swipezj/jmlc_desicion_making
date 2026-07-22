@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+data/synthetic/*.csv
+!data/synthetic/.gitkeep
+.DS_Store
