@@ -1,10 +1,27 @@
 numpy>=1.24
 pandas>=2.0
-pgmpy>=0.1.24
+scipy>=1.10
 scikit-learn>=1.3
 matplotlib>=3.7
 streamlit>=1.30
 pytest>=7.4
+
+# ВНИМАНИЕ: версия pgmpy НЕ закреплена точно, и это осознанный риск.
+# В установленной у автора версии API уже переименован (BayesianNetwork ->
+# DiscreteBayesianNetwork, MaximumLikelihoodEstimator -> DiscreteMLE,
+# StructureScore -> structure_score), и следующее обновление может сломать
+# src/network.py и src/learning.py снова.
+#
+# ЧТО СДЕЛАТЬ: выполнить `pip show pgmpy`, взять оттуда точную версию и
+# заменить строку ниже на `pgmpy==X.Y.Z`. До этого CI работает на любой
+# свежей версии и падает, если она несовместима, -- см. .github/workflows/ci.yml,
+# шаг «pgmpy-тесты обязаны выполниться».
+#
+# Обратите внимание: ядро проекта (src/model.py, decision.py, sensitivity.py,
+# structure_learning.py, calibration.py, reference_inference.py) от pgmpy не
+# зависит вовсе и работает без него. pgmpy нужен только для src/network.py
+# и src/learning.py -- как вторая, независимая реализация той же сети.
+pgmpy>=0.1.24
 
 # опционально: если не установлен, src/baselines.py откатывается на
 # sklearn.HistGradientBoostingClassifier без ошибок

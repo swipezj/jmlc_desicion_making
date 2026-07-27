@@ -5,21 +5,48 @@ on:
   pull_request:
 
 jobs:
-  test:
+  core:
+    # Ядро проекта не зависит от pgmpy -- эта джоба доказывает это явно,
+    # устанавливая всё, КРОМЕ pgmpy.
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.11"]
+        python-version: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install dependencies
+      - name: Установка зависимостей без pgmpy
+        run: |
+          python -m pip install --upgrade pip
+          pip install numpy pandas scipy scikit-learn matplotlib pytest
+      - name: Тесты, не требующие pgmpy
+        run: pytest tests/test_reference.py tests/test_new_modules.py -v
+      - name: Сверка с Табл. 3.6 диплома
+        run: python -m scripts.verify_reference
+
+  full:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Установка всех зависимостей
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      - name: Run tests (reference + pgmpy)
-        run: pytest -v
-      - name: Verify against thesis Table 3.6
-        run: python -m scripts.verify_reference
+      - name: Версия pgmpy (фиксируется в логе сборки)
+        run: python -c "import pgmpy; print('pgmpy', getattr(pgmpy, '__version__', 'unknown'))"
+      - name: Все тесты
+        run: pytest -v -rs
+      - name: pgmpy-тесты обязаны выполниться, а не пропуститься
+        # Иначе зелёный бейдж означал бы «прошли только numpy-тесты»:
+        # importorskip молча скипает весь модуль, если pgmpy сломан импортом.
+        run: |
+          pytest tests/test_network_pgmpy.py tests/test_learning.py -q -rs | tee /tmp/pgmpy.log
+          if grep -qi "skipped" /tmp/pgmpy.log; then
+            echo "::error::pgmpy-тесты были пропущены -- pgmpy не установлен или несовместим"
+            exit 1
+          fi
