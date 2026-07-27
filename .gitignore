@@ -7,3 +7,7 @@ venv/
 data/synthetic/*.csv
 !data/synthetic/.gitkeep
 .DS_Store
+
+# рабочие заметки, не для публикации
+jmlc-project-notes.md
+*.zip
