@@ -25,6 +25,10 @@ jobs:
         run: pytest tests/test_reference.py tests/test_new_modules.py -v
       - name: Сверка с Табл. 3.6 диплома
         run: python -m scripts.verify_reference
+      - name: Все ячейки ноутбуков выполняются без ошибок
+        # Ноутбуки лежат в репозитории собранными; эта проверка ловит случай,
+        # когда правка в src/ ломает повествование, а .ipynb остался старым.
+        run: python -m scripts.build_notebooks --check
 
   full:
     runs-on: ubuntu-latest
