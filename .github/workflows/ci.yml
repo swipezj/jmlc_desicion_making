@@ -25,7 +25,7 @@ jobs:
         run: pytest tests/test_reference.py tests/test_new_modules.py tests/test_scripts_and_app.py -v
       - name: Сверка с Табл. 3.6 диплома
         run: python -m scripts.verify_reference
-      - name: Пересчёт PRIOR отрабатывает на синтетической выгрузке
+      - name: Предобработка и пересчёт PRIOR отрабатывают на синтетической выгрузке
         # Скрипт запускается вручную и редко, поэтому ломается незаметно.
         run: |
           python -c "
