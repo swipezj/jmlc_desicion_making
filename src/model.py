@@ -37,6 +37,13 @@ class BayesNet:
 
     # ---------------------------------------------------------------- служебное
     def __post_init__(self) -> None:
+        # Структуру копируем, а не держим по ссылке. Иначе `from_spec()`
+        # вернул бы сеть, у которой `.states` -- это буквально глобальный
+        # STATES из network_spec, и любой эксперимент со структурой (а их тут
+        # ставит structure_learning) молча портил бы спецификацию для всего
+        # остального процесса. Словари крошечные, копирование бесплатно.
+        self.states = {v: list(ss) for v, ss in self.states.items()}
+        self.parents = {v: tuple(ps) for v, ps in self.parents.items()}
         if not self.order:
             self.order = _topological_order(self.states, self.parents)
         self._index = {v: {s: i for i, s in enumerate(ss)} for v, ss in self.states.items()}

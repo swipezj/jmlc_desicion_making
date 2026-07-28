@@ -39,6 +39,15 @@ HIGH_STATE = {"failure_prob": "высокая", "maintenance": "срочное",
 
 
 def _combo_prob(vars_: list[str], combo: tuple[str, ...]) -> float:
+    """P(vars_ = combo) для КОРНЕВЫХ узлов.
+
+    Перемножение маргиналов верно только потому, что корни в этой сети не
+    имеют родителей и потому независимы. Для скрытого узла формула молча
+    дала бы неверное число, поэтому предусловие проверяется явно.
+    """
+    assert all(v in ROOTS for v in vars_), (
+        f"_combo_prob применим только к корневым узлам, получено: "
+        f"{[v for v in vars_ if v not in ROOTS]}")
     return float(np.prod([PRIOR[v][STATES[v].index(s)] for v, s in zip(vars_, combo)]))
 
 

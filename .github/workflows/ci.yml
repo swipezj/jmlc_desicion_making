@@ -22,9 +22,22 @@ jobs:
           python -m pip install --upgrade pip
           pip install numpy pandas scipy scikit-learn matplotlib pytest
       - name: Тесты, не требующие pgmpy
-        run: pytest tests/test_reference.py tests/test_new_modules.py -v
+        run: pytest tests/test_reference.py tests/test_new_modules.py tests/test_scripts_and_app.py -v
       - name: Сверка с Табл. 3.6 диплома
         run: python -m scripts.verify_reference
+      - name: Пересчёт PRIOR отрабатывает на синтетической выгрузке
+        # Скрипт запускается вручную и редко, поэтому ломается незаметно.
+        run: |
+          python -c "
+          import numpy as np
+          from src.model import BayesNet
+          from src.network_spec import ROOTS
+          df = BayesNet.from_spec().sample(500, np.random.default_rng(0))[list(ROOTS)]
+          df['nomer_uzla'] = np.repeat(np.arange(50), 10)
+          df.to_csv('/tmp/ci_vygruzka.csv', index=False)
+          "
+          python -m scripts.fit_priors /tmp/ci_vygruzka.csv --object-col nomer_uzla
+
       - name: Все ячейки ноутбуков выполняются без ошибок
         # Ноутбуки лежат в репозитории собранными; эта проверка ловит случай,
         # когда правка в src/ ломает повествование, а .ipynb остался старым.

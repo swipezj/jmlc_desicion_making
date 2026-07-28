@@ -4,7 +4,7 @@
 | ------- | ----- |
 | [01_network_and_validation.ipynb](01_network_and_validation.ipynb) | Структура сети, сверка с Табл. 3.6, explaining away, чувствительность и ценность информации |
 | [02_decision_layer.ipynb](02_decision_layer.ipynb) | Матрица потерь, разбор одного решения, сравнение стратегий, ограниченная бригада |
-| [03_calibration.ipynb](03_calibration.ipynb) | Расследование разрыва в сценарии 3 и поиск недостающей дуги |
+| [03_calibration.ipynb](03_calibration.ipynb) | Расследование разрыва в сценарии 3, поиск недостающей дуги и цена принятия гипотезы B |
 | [04_learning_and_baselines.ipynb](04_learning_and_baselines.ipynb) | Обучение параметров и структуры, корректное сравнение с ML-моделями |
 
 Все ноутбуки лежат в репозитории **с выполненными выводами и графиками**,
