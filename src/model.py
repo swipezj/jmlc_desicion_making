@@ -23,10 +23,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-from src.network_spec import (
-    STATES, PARENTS, ROOTS, PRIOR,
-    CPT_DEVICE, CPT_PIPE, CPT_RELIABILITY, CPT_FAILURE, CPT_MAINT, cpt_anomaly,
-)
+from src.network_spec import STATES, PARENTS, ROOTS, PRIOR, CPT_TABLES
 
 
 @dataclass
@@ -200,29 +197,26 @@ def _topological_order(states: dict[str, list[str]],
     return order
 
 
-def _table(node: str, pa: tuple[str, ...], lookup) -> np.ndarray:
+def _table(node: str) -> np.ndarray:
+    """Словарную CPT из network_spec -> тензор (|pa_1|, ..., |pa_k|, |X|)."""
+    pa = PARENTS[node]
     shape = tuple(len(STATES[p]) for p in pa) + (len(STATES[node]),)
     out = np.zeros(shape)
-    for combo in itertools.product(*[STATES[p] for p in pa]):
-        idx = tuple(STATES[p].index(s) for p, s in zip(pa, combo))
-        out[idx] = lookup(*combo)
+    for combo, probs in CPT_TABLES[node].items():
+        out[tuple(STATES[p].index(s) for p, s in zip(pa, combo))] = probs
     return out
 
 
 def _spec_cpts() -> dict[str, np.ndarray]:
-    """Перенос словарных CPT из network_spec.py в тензорную форму."""
+    """Перенос словарных CPT из network_spec.py в тензорную форму.
+
+    Ключи CPT_TABLES[node] уже упорядочены как PARENTS[node], поэтому
+    отдельная лямбда на каждый узел больше не нужна: добавление родителя
+    правится в одном месте -- в network_spec.py.
+    """
     cpts = {v: np.asarray(PRIOR[v], dtype=float) for v in ROOTS}
-    cpts["device_cond"] = _table("device_cond", PARENTS["device_cond"],
-                                 lambda a, c: CPT_DEVICE[(a, c)])
-    cpts["pipe_cond"] = _table("pipe_cond", PARENTS["pipe_cond"],
-                               lambda p, f: CPT_PIPE[(p, f)])
-    cpts["reliability"] = _table("reliability", PARENTS["reliability"],
-                                 lambda d, f: CPT_RELIABILITY[(d, f)])
-    cpts["failure_prob"] = _table("failure_prob", PARENTS["failure_prob"],
-                                  lambda d, p: CPT_FAILURE[(d, p)])
-    cpts["maintenance"] = _table("maintenance", PARENTS["maintenance"],
-                                 lambda p, f: CPT_MAINT[(p, f)])
-    cpts["anomaly"] = _table("anomaly", PARENTS["anomaly"], cpt_anomaly)
+    for node in CPT_TABLES:
+        cpts[node] = _table(node)
     return cpts
 
 

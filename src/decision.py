@@ -167,9 +167,22 @@ def evaluate(df: pd.DataFrame, actions: np.ndarray, costs: Costs,
 
 
 def compare_policies(n: int = 20000, seed: int = 42, costs: Costs = Costs(),
-                     net: BayesNet | None = None) -> pd.DataFrame:
+                     net: BayesNet | None = None,
+                     gen_net: BayesNet | None = None) -> pd.DataFrame:
+    """Сравнение стратегий на синтетическом парке.
+
+    net     -- сеть, КОТОРОЙ ДУМАЮТ стратегии (всегда экспертная);
+    gen_net -- сеть, КОТОРАЯ ПОРОЖДАЕТ данные (по умолчанию та же).
+
+    Разделение важно методологически. Если данные брать из той же сети,
+    по которой считаются апостериорные, байесовская стратегия оптимальна
+    ПО ПОСТРОЕНИЮ, и её победа ничего не доказывает -- это ровно тот
+    дефект, из-за которого в src/baselines.py появился режим misspecified.
+    Передав сюда возмущённую сеть (`net.perturb(...)`), получаем честный
+    прогон: политика пользуется неверными вероятностями, мир устроен иначе.
+    """
     net = net or BayesNet.from_spec()
-    df = net.sample(n, np.random.default_rng(seed))
+    df = (gen_net or net).sample(n, np.random.default_rng(seed))
     lookup = posterior_lookup(net)
     rows = []
     for name, label in [("reactive", "Реактивное правило (порог расхода)"),
@@ -204,7 +217,7 @@ def triage(df: pd.DataFrame, capacity: int, net: BayesNet, costs: Costs,
 
 def capacity_sweep(capacities=(2, 5, 10, 20, 40, 80), n: int = 20000, seed: int = 42,
                    costs: Costs = Costs(), net: BayesNet | None = None,
-                   per: int = 100) -> pd.DataFrame:
+                   per: int = 100, gen_net: BayesNet | None = None) -> pd.DataFrame:
     """Сколько пропущенных срочных случаев остаётся при разном лимите выездов.
 
     Сравниваются два способа потратить один и тот же бюджет выездов:
@@ -212,7 +225,7 @@ def capacity_sweep(capacities=(2, 5, 10, 20, 40, 80), n: int = 20000, seed: int 
     ожидаемой выгоде). Это самая близкая к пилоту постановка.
     """
     net = net or BayesNet.from_spec()
-    df = net.sample(n, np.random.default_rng(seed))
+    df = (gen_net or net).sample(n, np.random.default_rng(seed))
     lookup = posterior_lookup(net)
     rng = np.random.default_rng(seed + 1)
     flagged = np.flatnonzero(df["flow"].to_numpy() == "anomal_high")
@@ -224,12 +237,14 @@ def capacity_sweep(capacities=(2, 5, 10, 20, 40, 80), n: int = 20000, seed: int 
         # сработавших по порогу -- у порогового правила нет ранжирования
         react = np.full(len(df), "не_выезжать", dtype=object)
         react[rng.permutation(flagged)[:budget]] = "срочный_выезд"
+        m_react = evaluate(df, react, costs, per)
+        m_bayes = evaluate(df, bayes_acts, costs, per)
         rows.append({
             "лимит_выездов_на_100": k,
-            "пропущено_срочных__реактивно": evaluate(df, react, costs, per)["пропущено_срочных"],
-            "пропущено_срочных__БСД": evaluate(df, bayes_acts, costs, per)["пропущено_срочных"],
-            "потери__реактивно": evaluate(df, react, costs, per)["средние_потери"],
-            "потери__БСД": evaluate(df, bayes_acts, costs, per)["средние_потери"],
+            "пропущено_срочных__реактивно": m_react["пропущено_срочных"],
+            "пропущено_срочных__БСД": m_bayes["пропущено_срочных"],
+            "потери__реактивно": m_react["средние_потери"],
+            "потери__БСД": m_bayes["средние_потери"],
         })
     return pd.DataFrame(rows)
 
@@ -315,9 +330,18 @@ if __name__ == "__main__":
     pd.set_option("display.width", 150)
 
     print("=" * 78)
-    print("СРАВНЕНИЕ СТРАТЕГИЙ (синтетический парк 20 000 наблюдений, на 100 объектов)")
+    print("РЕЖИМ 1: данные из САМОЙ экспертной сети (парк 20 000, на 100 объектов)")
     print("=" * 78)
     print(compare_policies(net=net).to_string(index=False))
+    print("Победа байесовской стратегии здесь ТАВТОЛОГИЧНА: данные порождены той же")
+    print("сетью, по которой считаются апостериорные. Приведено именно поэтому.")
+
+    misspec = net.perturb(np.random.default_rng(7), 0.5)
+    print("\n" + "=" * 78)
+    print("РЕЖИМ 2: данные из ВОЗМУЩЁННОЙ сети -- политика ошибается в вероятностях")
+    print("=" * 78)
+    print(compare_policies(net=net, gen_net=misspec).to_string(index=False))
+    print("Содержателен именно этот режим: структура у политики верная, числа -- нет.")
 
     print("\n" + "=" * 78)
     print("ЧУВСТВИТЕЛЬНОСТЬ К ЦЕНЕ ОШИБКИ (байесовская стратегия)")
@@ -327,7 +351,7 @@ if __name__ == "__main__":
     print("\n" + "=" * 78)
     print("ОГРАНИЧЕННАЯ БРИГАДА: как потратить один и тот же бюджет выездов")
     print("=" * 78)
-    print(capacity_sweep(net=net).round(3).to_string(index=False))
+    print(capacity_sweep(net=net, gen_net=misspec).round(3).to_string(index=False))
 
     print("\n" + "=" * 78)
     print("РАЗБОР ОДНОГО РЕШЕНИЯ -- Сценарий 1 Табл. 3.6")

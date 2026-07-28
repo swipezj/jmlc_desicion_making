@@ -38,8 +38,8 @@ from scipy.optimize import minimize
 
 from src.model import BayesNet
 from src.network_spec import (
-    CPT_DEVICE, CPT_MAINT, CPT_PIPE, CPT_RELIABILITY, SCENARIOS_TABLE_3_6,
-    STATES, TARGET_HIGH_STATE, cpt_anomaly,
+    SCENARIOS_TABLE_3_6, STATES, TARGET_HIGH_STATE,
+    cpt_anomaly, cpt_device, cpt_maintenance, cpt_pipe, cpt_reliability,
 )
 
 DEV, PIPE, REL, FLOW, FAIL = (STATES["device_cond"], STATES["pipe_cond"],
@@ -72,36 +72,52 @@ def compact_shape(parents: tuple[str, ...]) -> tuple[int, ...]:
 # Тензоры, не зависящие от подгоняемой CPT, собираются один раз: внутри
 # оптимизатора scenario_outputs вызывается десятки тысяч раз, и пересборка
 # таблиц из словарей на каждом вызове была основной статьёй расходов.
-_MAINT = np.stack([[CPT_MAINT[(p, x)] for x in FAIL] for p in PIPE])         # (pipe,fail,m)
-_REL = {f: np.stack([CPT_RELIABILITY[(d, f)] for d in DEV]) for f in FLOW}   # (d,rel)
-_ANOM = {f: np.stack([[cpt_anomaly(p, r, f) for r in REL] for p in PIPE])    # (pipe,rel,a)
-         for f in FLOW}
+#
+# После пересмотра структуры формы изменились: maintenance зависит от
+# (device, pipe, reliability, failure), anomaly -- от (pipe, reliability,
+# flow), а reliability -- от (pipe, flow, calibration, age), то есть от
+# pipe_cond, а не от device_cond, как было раньше.
+_MAINT = np.array([[[[cpt_maintenance(d, p, r, x) for x in FAIL]
+                     for r in REL] for p in PIPE] for d in DEV])      # (d,pipe,rel,fail,m)
+_ANOM = np.array([[[cpt_anomaly(p, r, f) for f in FLOW]
+                   for r in REL] for p in PIPE])                      # (pipe,rel,flow,a)
+
+
+def _rel_vector(flow: str, calibration: str, age: str) -> np.ndarray:
+    """P(reliability) при фиксированных flow, calibration, age.
+
+    После снятия дуги pipe_cond -> reliability достоверность не зависит от
+    гидравлики, поэтому здесь вектор, а не таблица по pipe_cond.
+    """
+    return np.asarray(cpt_reliability(flow, calibration, age))  # (rel,)
 
 
 def scenario_outputs(evidence: dict[str, str], failure_full: np.ndarray) -> dict[str, np.ndarray]:
     """Замкнутая формула для апостериорных выходов при ПОЛНОМ свидетельстве на входах.
 
     Когда наблюдены все пять корневых узлов, device_cond и pipe_cond условно
-    независимы (общих родителей нет, общие потомки не наблюдаются), поэтому
-        P(d, pipe, rel | e) = P(d | e) · P(pipe | e) · P(rel | d, flow)
+    независимы (общих родителей среди ненаблюдаемых узлов нет, общие потомки
+    не наблюдаются), поэтому
+        P(d, pipe, rel | e) = P(d | e) · P(pipe | e) · P(rel | pipe, e)
     и всё считается сворачиванием четырёх маленьких тензоров вместо перебора
     79 тыс. комбинаций. Эквивалентность полному перебору проверяется в
-    tests/test_calibration.py.
+    tests/test_new_modules.py.
     """
     f = evidence["flow"]
-    p_d = np.asarray(CPT_DEVICE[(evidence["age"], evidence["calibration"])])      # (d,)
-    p_pipe = np.asarray(CPT_PIPE[(evidence["pressure"], f)])                      # (pipe,)
-    p_rel = _REL[f]                                                               # (d, rel)
+    p_d = np.asarray(cpt_device(evidence["pressure"], evidence["temperature"],
+                                evidence["calibration"], evidence["age"]))       # (d,)
+    p_pipe = np.asarray(cpt_pipe(evidence["pressure"], evidence["temperature"], f))  # (pipe,)
+    p_rel = _rel_vector(f, evidence["calibration"], evidence["age"])            # (rel,)
     fi = FLOW.index(f)
-    fail = failure_full[:, :, :, fi, :]                                           # (d,pipe,rel,f)
+    fail = failure_full[:, :, :, fi, :]                                          # (d,pipe,rel,f)
 
-    joint = np.einsum("d,p,dr->dpr", p_d, p_pipe, p_rel)                          # (d,pipe,rel)
-    p_pipe_fail = np.einsum("dpr,dprf->pf", joint, fail)                          # (pipe, fail)
-    p_pipe_rel = joint.sum(axis=0)                                                # (pipe, rel)
+    joint = np.einsum("d,p,r->dpr", p_d, p_pipe, p_rel)                         # (d,pipe,rel)
+    p_joint_fail = np.einsum("dpr,dprf->dprf", joint, fail)                      # (d,pipe,rel,fail)
+    p_pipe_rel = joint.sum(axis=0)                                               # (pipe, rel)
     return {
-        "failure_prob": p_pipe_fail.sum(axis=0),
-        "maintenance": np.einsum("pf,pfm->m", p_pipe_fail, _MAINT),
-        "anomaly": np.einsum("pr,pra->a", p_pipe_rel, _ANOM[f]),
+        "failure_prob": p_joint_fail.sum(axis=(0, 1, 2)),
+        "maintenance": np.einsum("dprf,dprfm->m", p_joint_fail, _MAINT),
+        "anomaly": np.einsum("pr,pra->a", p_pipe_rel, _ANOM[:, :, fi, :]),
     }
 
 
@@ -189,8 +205,8 @@ def compare_hypotheses(lams=(0.0, 0.01, 0.05, 0.2, 1.0)) -> pd.DataFrame:
 
 
 def _expert_compact() -> np.ndarray:
-    from src.network_spec import CPT_FAILURE
-    return np.stack([[CPT_FAILURE[(d, p)] for p in PIPE] for d in DEV])
+    from src.network_spec import CPT_FAILURE_EXPERT
+    return np.stack([[CPT_FAILURE_EXPERT[(d, p)] for p in PIPE] for d in DEV])
 
 
 def calibrated_network(hypothesis: str = "B: device, pipe, flow", lam: float = 0.05,
@@ -300,3 +316,14 @@ if __name__ == "__main__":
 недостающей дуге», а не «восстановленный оригинал». В network_spec.py она
 доступна отдельной константой с явной пометкой о происхождении; переключение
 модели на неё -- сознательное действие, а не умолчание.""")
+
+
+def _current_compact() -> np.ndarray:
+    """Действующая CPT_FAILURE из network_spec в форме (device, pipe, flow, f).
+
+    Нужна тестам и отчётам, которым важна сеть КАК ОНА ЕСТЬ, а не
+    экспертная база гипотезы A (`_expert_compact`).
+    """
+    from src.network_spec import CPT_FAILURE
+    return np.stack([[[CPT_FAILURE[(d, p, f)] for f in FLOW]
+                      for p in PIPE] for d in DEV])

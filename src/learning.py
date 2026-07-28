@@ -28,9 +28,8 @@ from src.data_generator import generate
 
 def _bare_structure_model() -> "BayesianNetwork":
     """Модель ТОЛЬКО со структурой (без CPT) -- то, что нужно эстиматорам."""
-    model = BayesianNetwork(EDGES)
-    model.add_node("temperature")
-    return model
+    # изолированных узлов больше нет -- все 11 узлов создаются из EDGES
+    return BayesianNetwork(EDGES)
 
 
 def learn(df: pd.DataFrame, estimator_cls, **kwargs):

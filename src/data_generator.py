@@ -16,37 +16,42 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from src.network_spec import (
-    STATES, PRIOR, CPT_DEVICE, CPT_PIPE, CPT_RELIABILITY, CPT_FAILURE,
-    CPT_MAINT, cpt_anomaly, ROOTS,
-)
+from src.network_spec import STATES, PRIOR, PARENTS, CPT_TABLES, ROOTS
 
 
 def _sample(states: list[str], probs: list[float], rng: np.random.Generator) -> str:
     return states[rng.choice(len(states), p=probs)]
 
 
+def _topological_order() -> list[str]:
+    order, pending = list(ROOTS), [v for v in STATES if v not in ROOTS]
+    while pending:
+        ready = [v for v in pending if all(p in order for p in PARENTS[v])]
+        if not ready:
+            raise ValueError(f"В графе цикл или висячий родитель: {pending}")
+        order += ready
+        pending = [v for v in pending if v not in order]
+    return order
+
+
 def generate(n: int, seed: int = 42) -> pd.DataFrame:
-    """Сгенерировать n синтетических наблюдений (ancestral sampling)."""
+    """Сгенерировать n синтетических наблюдений (ancestral sampling).
+
+    Порядок узлов и наборы родителей берутся из network_spec, а не
+    прописаны здесь: после пересмотра структуры захардкоженный список
+    вызовов пришлось бы править в третьем месте подряд.
+    """
     rng = np.random.default_rng(seed)
+    order = _topological_order()
     rows = []
     for _ in range(n):
-        a = {v: _sample(STATES[v], PRIOR[v], rng) for v in ROOTS}
-        a["device_cond"] = _sample(STATES["device_cond"],
-                                    CPT_DEVICE[(a["age"], a["calibration"])], rng)
-        a["pipe_cond"] = _sample(STATES["pipe_cond"],
-                                  CPT_PIPE[(a["pressure"], a["flow"])], rng)
-        a["reliability"] = _sample(STATES["reliability"],
-                                    CPT_RELIABILITY[(a["device_cond"], a["flow"])], rng)
-        a["failure_prob"] = _sample(STATES["failure_prob"],
-                                     CPT_FAILURE[(a["device_cond"], a["pipe_cond"])], rng)
-        a["maintenance"] = _sample(STATES["maintenance"],
-                                    CPT_MAINT[(a["pipe_cond"], a["failure_prob"])], rng)
-        a["anomaly"] = _sample(STATES["anomaly"],
-                                cpt_anomaly(a["pipe_cond"], a["reliability"], a["flow"]), rng)
+        a: dict[str, str] = {}
+        for v in order:
+            probs = (PRIOR[v] if v in ROOTS
+                     else CPT_TABLES[v][tuple(a[p] for p in PARENTS[v])])
+            a[v] = _sample(STATES[v], probs, rng)
         rows.append(a)
-    cols = list(STATES.keys())
-    return pd.DataFrame(rows, columns=cols)
+    return pd.DataFrame(rows, columns=list(STATES.keys()))
 
 
 if __name__ == "__main__":

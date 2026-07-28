@@ -26,7 +26,6 @@ TIER_LABEL = {
 
 def build_graph() -> nx.DiGraph:
     g = nx.DiGraph()
-    g.add_node("temperature")  # изолированный узел, см. network_spec.py
     g.add_edges_from(EDGES)
     return g
 
@@ -61,7 +60,7 @@ def draw(output_path: str = "reports/figures/network_graph.png") -> None:
         ax.text(0, y, TIER_LABEL[tier], ha="center", fontsize=9, style="italic", color="#333333")
 
     ax.set_title("Граф байесовской сети — предиктивное ТО инженерных систем\n"
-                  "(воспроизводит структуру §3.2 диплома; изолированный узел temperature — известное ограничение)",
+                  "(структура §3.2 диплома с восстановленными по экспертному опросу дугами температуры)",
                   fontsize=11)
     ax.axis("off")
     fig.tight_layout()

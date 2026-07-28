@@ -32,9 +32,12 @@ import numpy as np
 import pandas as pd
 
 from src.model import BayesNet
-from src.network_spec import EDGES, STATES
+from src.network_spec import EDGES, PARENTS, STATES
 
-MAX_PARENTS = 3
+# Должно быть НЕ МЕНЬШЕ максимума по экспертному графу, иначе истинная
+# структура недостижима для поиска и полнота по скелету упирается в
+# искусственный потолок. Сейчас максимум 4 (device_cond и maintenance).
+MAX_PARENTS = max(4, max(len(v) for v in PARENTS.values()))
 
 
 class BICScorer:
@@ -219,9 +222,15 @@ if __name__ == "__main__":
 строилась, -- она нужна для решающего слоя (src/decision.py), а
 статистически эквивалентный граф с перевёрнутыми дугами её теряет.""")
 
-    print("\nПроверка на «мёртвый» узел temperature:")
+    print("\nПроверка узла temperature (до пересмотра структуры он был изолирован):")
     t_edges = [e for e in _edge_set(learned) if "temperature" in e]
-    print(f"  дуг с temperature найдено: {len(t_edges)}"
-          + (f" ({', '.join(f'{a}->{b}' for a, b in t_edges)})" if t_edges else
-             " -- алгоритм независимо подтверждает, что данные не содержат"
-             " связи температуры ни с чем"))
+    if t_edges:
+        print(f"  дуг с temperature найдено: {len(t_edges)}"
+              f" ({', '.join(f'{a}->{b}' for a, b in t_edges)})")
+        print("  Направление здесь читать не нужно -- см. оговорку о марковской"
+              " эквивалентности выше; значимо то, что дуги вообще есть.")
+    else:
+        print("  дуг с temperature не найдено. Это НЕ подтверждение изоляции узла:"
+              "\n  восстановленные экспертом эффекты температуры слабые"
+              " (см. src/sensitivity.py),\n  и жадный поиск по BIC на такой"
+              " выборке их может просто не увидеть.")

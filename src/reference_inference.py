@@ -19,9 +19,20 @@ import itertools
 import numpy as np
 
 from src.network_spec import (
-    STATES, PRIOR, CPT_DEVICE, CPT_PIPE, CPT_RELIABILITY, CPT_FAILURE,
-    CPT_MAINT, cpt_anomaly, ROOTS,
+    STATES, PRIOR, ROOTS,
+    CPT_DEVICE_BASE, CPT_PIPE_BASE, CPT_MAINT_BASE, CPT_FAILURE,
+    MULT_TEMP_DEVICE, MULT_PRESSURE_DEVICE, MULT_TEMP_PIPE,
+    MULT_DEVICE_MAINT, MULT_RELIABILITY_MAINT,
+    SEVERITY_RELIABILITY, RELIABILITY_ALPHA, RELIABILITY_GOOD, RELIABILITY_BAD,
+    FLOW_WEIGHT, DELTA_FLOW_ANOMALY,
 )
+
+# ЭТОТ МОДУЛЬ НАМЕРЕННО НЕ ИМПОРТИРУЕТ ГОТОВЫЕ CPT_DEVICE / CPT_PIPE /
+# CPT_RELIABILITY / CPT_MAINT / CPT_ANOMALY. Он берёт только базовые таблицы
+# и коэффициенты и собирает строки заново -- иначе это была бы проверка
+# движка вывода при общем источнике CPT, а не проверка самой сборки CPT.
+# Тест test_engine_matches_reference_oracle сверяет обе ветки на всех 108
+# комбинациях входных свидетельств.
 
 VARS = list(STATES.keys())
 
@@ -30,17 +41,65 @@ def _idx(var: str, label: str) -> int:
     return STATES[var].index(label)
 
 
+def _norm(v: np.ndarray) -> np.ndarray:
+    return v / v.sum()
+
+
+def _row_device(a: dict[str, str]) -> np.ndarray:
+    v = np.array(CPT_DEVICE_BASE[(a["age"], a["calibration"])], dtype=float)
+    if a["temperature"] == "otklonenie":
+        v = _norm(v * np.array(MULT_TEMP_DEVICE))
+    if a["pressure"] == "otklonenie":
+        v = _norm(v * np.array(MULT_PRESSURE_DEVICE))
+    return _norm(v)
+
+
+def _row_pipe(a: dict[str, str]) -> np.ndarray:
+    v = np.array(CPT_PIPE_BASE[(a["pressure"], a["flow"])], dtype=float)
+    if a["temperature"] == "otklonenie":
+        v = _norm(v * np.array(MULT_TEMP_PIPE))
+    return _norm(v)
+
+
+def _row_reliability(a: dict[str, str]) -> np.ndarray:
+    s = [SEVERITY_RELIABILITY["flow"][a["flow"]],
+         SEVERITY_RELIABILITY["calibration"][a["calibration"]],
+         SEVERITY_RELIABILITY["age"][a["age"]]]
+    sev = min(1.0, max(s) + RELIABILITY_ALPHA * (sum(s) - max(s)))
+    return _norm(RELIABILITY_GOOD + (RELIABILITY_BAD - RELIABILITY_GOOD) * sev)
+
+
+def _row_maintenance(a: dict[str, str]) -> np.ndarray:
+    v = np.array(CPT_MAINT_BASE[(a["pipe_cond"], a["failure_prob"])], dtype=float)
+    v = _norm(v * np.array(MULT_DEVICE_MAINT[a["device_cond"]]))
+    v = _norm(v * np.array(MULT_RELIABILITY_MAINT[a["reliability"]]))
+    return _norm(v)
+
+
+def _row_anomaly(a: dict[str, str]) -> np.ndarray:
+    v = {"норма":                  np.array([0.90, 0.07, 0.03]),
+         "нарушена_герметичность": np.array([0.10, 0.85, 0.05]),
+         "засор":                  np.array([0.75, 0.05, 0.20])}[a["pipe_cond"]].copy()
+    v = v + FLOW_WEIGHT * np.array(DELTA_FLOW_ANOMALY[a["flow"]])
+    if a["reliability"] == "недостоверная":
+        v = v + np.array([0.35, -0.25, -0.10])
+    elif a["reliability"] == "сомнительная":
+        v = v + np.array([0.12, -0.08, -0.04])
+    return _norm(np.clip(v, 0.01, None))
+
+
 def joint_prob(a: dict[str, str]) -> float:
     """P(полное присвоение всем 11 переменным) по факторизации сети."""
     p = 1.0
     for v in ROOTS:
         p *= PRIOR[v][_idx(v, a[v])]
-    p *= CPT_DEVICE[(a["age"], a["calibration"])][_idx("device_cond", a["device_cond"])]
-    p *= CPT_PIPE[(a["pressure"], a["flow"])][_idx("pipe_cond", a["pipe_cond"])]
-    p *= CPT_RELIABILITY[(a["device_cond"], a["flow"])][_idx("reliability", a["reliability"])]
-    p *= CPT_FAILURE[(a["device_cond"], a["pipe_cond"])][_idx("failure_prob", a["failure_prob"])]
-    p *= CPT_MAINT[(a["pipe_cond"], a["failure_prob"])][_idx("maintenance", a["maintenance"])]
-    p *= cpt_anomaly(a["pipe_cond"], a["reliability"], a["flow"])[_idx("anomaly", a["anomaly"])]
+    p *= _row_device(a)[_idx("device_cond", a["device_cond"])]
+    p *= _row_pipe(a)[_idx("pipe_cond", a["pipe_cond"])]
+    p *= _row_reliability(a)[_idx("reliability", a["reliability"])]
+    p *= CPT_FAILURE[(a["device_cond"], a["pipe_cond"], a["flow"])][
+        _idx("failure_prob", a["failure_prob"])]
+    p *= _row_maintenance(a)[_idx("maintenance", a["maintenance"])]
+    p *= _row_anomaly(a)[_idx("anomaly", a["anomaly"])]
     return p
 
 

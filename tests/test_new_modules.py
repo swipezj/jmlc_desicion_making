@@ -15,7 +15,7 @@ import itertools
 import numpy as np
 import pytest
 
-from src.calibration import (HYPOTHESES, THESIS, _expert_compact, expand, fit,
+from src.calibration import (HYPOTHESES, THESIS, _current_compact, _expert_compact, expand, fit,
                              scenario_outputs, targets_vector)
 from src.decision import (ACTIONS, Costs, NEED, bayes_action, evaluate,
                           expected_losses, policy_actions, posterior_lookup, triage)
@@ -47,7 +47,11 @@ def test_engine_matches_reference_oracle(net):
 
 def test_cpt_shapes_and_normalisation(net):
     net.validate()          # не должно бросать
-    assert net.n_free_params == 146
+    # 428, а не прежние 146: температура и давление добавились в родители
+    # device_cond, pipe_cond получил температуру, reliability и maintenance --
+    # по два новых родителя каждый, у anomaly расход сохранён. См. README,
+    # «Пересмотр структуры».
+    assert net.n_free_params == 428
 
 
 def test_validate_rejects_broken_cpt(net):
@@ -65,7 +69,11 @@ def test_sampling_reproduces_marginals(net):
 
 
 def test_fit_recovers_cpt_on_large_sample(net):
-    df = net.sample(50000, np.random.default_rng(1))
+    # 200k, а не 50k: пространство конфигураций родителей выросло вчетверо
+    # (device_cond: 9 строк -> 36), и на 50k редкие комбинации вроде
+    # "давление откл. + температура откл. + поверка истекла + прибор до 3 лет"
+    # набирают несколько десятков наблюдений -- оценка по ним шумная.
+    df = net.sample(200_000, np.random.default_rng(1))
     learned = net.fit(df, alpha=1.0)
     for v in ["device_cond", "pipe_cond"]:
         assert np.abs(learned.cpt[v] - net.cpt[v]).max() < 0.12
@@ -157,13 +165,15 @@ def test_expected_losses_length_matches_actions(net):
 
 
 # --------------------------------------------------------- src/sensitivity.py
-def test_temperature_is_inert(net):
-    """Документированное ограничение структуры §3.2, а не регрессия кода.
+def test_no_input_is_inert(net):
+    """Все пять входных каналов АИС влияют хоть на что-то.
 
-    Если этот тест однажды упадёт -- значит, дуга от температуры появилась;
-    тогда нужно обновить README и снять оговорку, а не чинить тест.
+    Раньше здесь стоял обратный тест: температура была изолирована, и это
+    фиксировалось как известное ограничение структуры §3.2. После
+    восстановления дуг по экспертному опросу мёртвых входов быть не должно
+    -- если тест упадёт, значит очередная правка снова обесточила канал.
     """
-    assert inert_inputs(net) == ["temperature"]
+    assert inert_inputs(net) == []
 
 
 def test_flow_is_the_strongest_input(net):
@@ -187,15 +197,26 @@ def test_information_never_hurts(net):
     assert r_all <= r_one + 1e-12 <= r_none + 1e-12
 
 
-def test_voi_of_inert_input_is_zero(net):
+def test_temperature_has_positive_value(net):
+    """Опрос канала температуры перестал быть бесполезным.
+
+    Эффект слабый по построению (отклонение от температурного графика чаще
+    означает ошибку теплоснабжающей организации, чем отказ прибора), поэтому
+    проверяется только знак, а не величина.
+    """
     voi = value_of_information(net).set_index("вход")
-    assert voi.loc["temperature", "вклад_сверх_остальных"] == pytest.approx(0.0, abs=1e-9)
+    assert voi.loc["temperature", "вклад_сверх_остальных"] > 0.0
 
 
 # --------------------------------------------------------- src/calibration.py
 def test_closed_form_matches_enumeration(net):
-    """Аналитическая формула для сценариев эквивалентна полному перебору."""
-    full = expand(_expert_compact(), ("device_cond", "pipe_cond"))
+    """Аналитическая формула для сценариев эквивалентна полному перебору.
+
+    Берём CPT_FAILURE из действующей спецификации (после перехода на
+    гипотезу B у неё три родителя), а не экспертную двухродительскую
+    базу: иначе тест сверял бы формулу с сетью, которой уже нет.
+    """
+    full = expand(_current_compact(), HYPOTHESES["B: device, pipe, flow"])
     for spec in SCENARIOS_TABLE_3_6.values():
         analytic = scenario_outputs(spec["evidence"], full)
         exact = net.posterior(spec["evidence"], list(analytic))
@@ -235,20 +256,35 @@ def test_bic_prefers_true_edge_over_none(net):
 def test_bic_penalises_irrelevant_parent(net):
     df = net.sample(3000, np.random.default_rng(12))
     s = BICScorer(df)
-    assert s.local("device_cond", ("age", "temperature")) < s.local("device_cond", ("age",))
+    # flow, а не temperature: температура теперь настоящий родитель
+    # device_cond, и штрафовать её было бы неверно по существу. flow с
+    # device_cond не смежен и не имеет с ним общих предков.
+    assert s.local("device_cond", ("age", "flow")) < s.local("device_cond", ("age",))
 
 
 def test_hill_climb_recovers_most_of_the_skeleton(net):
     df = net.sample(5000, np.random.default_rng(13))
     learned, _ = hill_climb(df)
-    assert compare_to_expert(learned)["скелет_F1"] >= 0.75
+    # Порог снижен с 0.75: у reliability и maintenance стало по четыре
+    # родителя, а восстанавливать плотные родительские множества жадным
+    # поиском заметно труднее, чем разреженные.
+    assert compare_to_expert(learned)["скелет_F1"] >= 0.70
 
 
-def test_hill_climb_leaves_temperature_isolated(net):
+def test_hill_climb_does_not_claim_temperature_is_dead(net):
+    """Раньше здесь проверялось, что алгоритм оставляет температуру изолированной.
+
+    Теперь у температуры есть дуги, но эффект слабый, и требовать от жадного
+    поиска по BIC их обнаружения на 5000 наблюдений было бы флаки-тестом.
+    Проверяем то, что действительно должно выполняться: если алгоритм всё же
+    нашёл дугу с температурой, она соединяет её с одним из двух настоящих
+    потомков, а не с произвольным узлом.
+    """
     df = net.sample(5000, np.random.default_rng(14))
     learned, _ = hill_climb(df)
     edges = {(p, c) for c, ps in learned.items() for p in ps}
-    assert not any("temperature" in e for e in edges)
+    found = {a if b == "temperature" else b for a, b in edges if "temperature" in (a, b)}
+    assert found <= {"device_cond", "pipe_cond"}, f"температура связалась с {found}"
 
 
 def test_hill_climb_result_is_acyclic(net):

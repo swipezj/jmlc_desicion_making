@@ -54,7 +54,8 @@ for i, var in enumerate(ROOTS):
     with cols[i % 3]:
         evidence[var] = st.selectbox(RUSSIAN_NAME[var], STATES[var], key=var)
         if var == "temperature":
-            st.caption("не влияет на вывод — см. «Известное ограничение» в README")
+            st.caption("норма определяется температурным графиком по уличной "
+                       "температуре, допуск ±3% (ПТЭ ТЭ, приказ Минэнерго № 115)")
 
 if st.button("Выполнить вероятностный вывод", type="primary"):
     targets = ["device_cond", "pipe_cond", "reliability",
